@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import gzip
+import html
 import json
 import os
 import re
@@ -43,7 +44,7 @@ STANDARD_AUSGABE = ROOT / "docs" / "data"
 
 CKAN = "https://data.opentransportdata.swiss"
 DATENSAETZE = ["ist-daten-v2", "istdaten"]  # v2 zuerst (vollständiger), v1 als Reserve
-USER_AGENT = "plus60-verspaetungsanalyse/1.0 (open data research; github actions)"
+USER_AGENT = "Mozilla/5.0 (compatible; plus60-verspaetungsanalyse/1.0; +https://github.com/Danielthecreatoroftheworld/plus60)"
 
 SCHWELLE = 60                 # Minuten – ab hier kommt eine Fahrt in die Liste
 STUFEN = (60, 90, 120, 180)   # für die Kennzahlen
@@ -139,7 +140,7 @@ def zugnummer(linien_id: str | None, fahrt: str, produkt: str) -> str | None:
 
 # ---------------------------------------------------------------- Download
 
-_katalog: dict[str, list | None] = {}
+_katalog: dict[str, dict[str, str] | None] = {}
 
 
 def http_get(url: str, timeout: int = 60):
@@ -147,24 +148,33 @@ def http_get(url: str, timeout: int = 60):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def ckan_ressourcen(datensatz: str) -> list | None:
-    """Alle Dateien eines Datensatzes laut CKAN-Katalog (None = nicht erreichbar)."""
+def katalog(datensatz: str) -> dict[str, str] | None:
+    """Datum → Download-Link, gelesen von der Datensatz-Seite (None = nicht erreichbar).
+
+    Die CKAN-Programmierschnittstelle (/api/3/…) ist gesperrt, die normale
+    Datensatz-Seite listet die Tagesdateien aber mit direkten Links auf."""
     if datensatz in _katalog:
         return _katalog[datensatz]
-    url = f"{CKAN}/api/3/action/package_show?id={urllib.parse.quote(datensatz)}"
+    seite = f"{CKAN}/de/dataset/{urllib.parse.quote(datensatz)}"
     letzter_fehler = None
     for versuch in range(3):
         try:
-            with http_get(url) as r:
-                antwort = json.load(r)
-            if not antwort.get("success"):
-                raise RuntimeError(antwort.get("error"))
-            _katalog[datensatz] = antwort["result"].get("resources", [])
-            return _katalog[datensatz]
+            with http_get(seite) as r:
+                html_text = r.read().decode("utf-8", errors="replace")
+            dateien: dict[str, str] = {}
+            for href in re.findall(r'href="([^"]+)"', html_text):
+                href = html.unescape(href)
+                m = re.search(r"/download/(\d{4}-\d{2}-\d{2})_ist[-_]?daten\.csv$", href, re.I)
+                if m and m.group(1) not in dateien:  # die Seite listet die neuste Version zuerst
+                    dateien[m.group(1)] = urllib.parse.urljoin(seite, href)
+            if not dateien:
+                raise RuntimeError("keine Tagesdateien auf der Seite gefunden")
+            _katalog[datensatz] = dateien
+            return dateien
         except Exception as e:  # noqa: BLE001 – wir wollen jeden Fehler protokollieren
             letzter_fehler = e
             time.sleep(5 * (versuch + 1))
-    log(f"  ! Katalog «{datensatz}» nicht erreichbar: {letzter_fehler}")
+    log(f"  ! Datensatz-Seite «{datensatz}» nicht lesbar: {letzter_fehler}")
     _katalog[datensatz] = None
     return None
 
@@ -174,23 +184,15 @@ def finde_datei(datum: dt.date) -> dict | None:
     tag = datum.isoformat()
     erreichbar = False
     for ds in DATENSAETZE:
-        ressourcen = ckan_ressourcen(ds)
-        if ressourcen is None:
+        dateien = katalog(ds)
+        if dateien is None:
             continue
         erreichbar = True
-        treffer = []
-        for r in ressourcen:
-            url = r.get("url") or ""
-            name = r.get("name") or r.get("identifier") or Path(urllib.parse.urlparse(url).path).name
-            text = f"{name} {url}".lower()
-            if tag in text and re.search(r"ist[-_]?daten", text) and url:
-                treffer.append((r.get("last_modified") or r.get("created") or "", name, url))
-        if treffer:
-            treffer.sort(reverse=True)  # neuste Version zuerst, falls doppelt
-            _, name, url = treffer[0]
-            return {"datensatz": ds, "datei": name, "url": url}
+        if tag in dateien:
+            url = dateien[tag]
+            return {"datensatz": ds, "datei": Path(urllib.parse.urlparse(url).path).name, "url": url}
     if not erreichbar:
-        raise RuntimeError("Der Datenkatalog von opentransportdata.swiss ist nicht erreichbar.")
+        raise RuntimeError("Die Datensatz-Seiten von opentransportdata.swiss sind nicht erreichbar.")
     return None
 
 

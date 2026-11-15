@@ -54,22 +54,25 @@ def pruefe_tag(datum: str) -> tuple[dict, dict]:
     return tag, info
 
 
+def seite(*links: str) -> bytes:
+    """Nachbau der Datensatz-Seite mit Download-Links."""
+    return ("<html><body>" + "".join(f'<a href="{l}">x</a>' for l in links) + "</body></html>").encode()
+
+
 def pruefe_katalog() -> None:
-    fake = {"success": True, "result": {"resources": [
-        {"name": "2026-11-13_IstDaten.csv", "url": "https://x/r/1/download/2026-11-13_istdaten.csv",
-         "last_modified": "2026-11-14T05:00:00"},
-        {"name": "2026-11-14_IstDaten.csv", "url": "https://x/r/2/download/2026-11-14_istdaten.csv",
-         "last_modified": "2026-11-15T05:00:00"},
-        {"name": "2026-11-14_IstDaten.csv", "url": "https://x/r/3/download/2026-11-14_istdaten.csv",
-         "last_modified": "2026-11-15T09:00:00"},  # später korrigierte Version
-    ]}}
+    html_seite = seite(
+        "/de/dataset/ist-daten-v2/resource/1",
+        "https://x/dataset/a/resource/3/download/2026-11-14_istdaten.csv",  # neuste Version zuerst
+        "https://x/dataset/a/resource/2/download/2026-11-14_istdaten.csv",
+        "https://x/dataset/a/resource/1/download/2026-11-13_istdaten.csv",
+    )
     alt = analyse.http_get
-    analyse.http_get = lambda url, timeout=60: io.BytesIO(json.dumps(fake).encode())
+    analyse.http_get = lambda url, timeout=60: io.BytesIO(html_seite)
     analyse._katalog.clear()
     try:
         r = analyse.finde_datei(dt.date(2026, 11, 14))
-        assert r and r["url"] == "https://x/r/3/download/2026-11-14_istdaten.csv", r
-        assert r["datensatz"] == "ist-daten-v2"
+        assert r and r["url"] == "https://x/dataset/a/resource/3/download/2026-11-14_istdaten.csv", r
+        assert r["datensatz"] == "ist-daten-v2" and r["datei"] == "2026-11-14_istdaten.csv"
         assert analyse.finde_datei(dt.date(2026, 11, 15)) is None
     finally:
         analyse.http_get = alt
@@ -84,10 +87,9 @@ def pruefe_ablauf() -> None:
         tage = [heute - dt.timedelta(days=i) for i in (3, 2, 1)]
         for d in tage[:2]:  # der letzte Tag ist «noch nicht veröffentlicht»
             beispieldaten.erzeuge(d, tmp / "quelle" / f"{d}_istdaten.csv")
-        fake = {"success": True, "result": {"resources": [
-            {"name": f"{d}_IstDaten.csv", "url": f"https://x/download/{d}_istdaten.csv"} for d in tage[:2]]}}
+        html_seite = seite(*[f"https://x/download/{d}_istdaten.csv" for d in tage[:2]])
         alt = (analyse.http_get, analyse.herunterladen, analyse.heute_ch)
-        analyse.http_get = lambda url, timeout=60: io.BytesIO(json.dumps(fake).encode())
+        analyse.http_get = lambda url, timeout=60: io.BytesIO(html_seite)
         analyse.herunterladen = lambda url, ziel: shutil.copy(tmp / "quelle" / Path(url).name, ziel)
         analyse.heute_ch = lambda: heute
         analyse._katalog.clear()
