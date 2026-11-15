@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="de-CH">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plus 60</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317202b'/%3E%3Crect x='6' y='19' width='20' height='5' rx='2.5' fill='%23ffc21f'/%3E%3Cpath d='M11 8v8M7 12h8' stroke='%23ffffff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<meta name="description" content="Die grössten Verspätungen im Schweizer ÖV, jeden Tag automatisch ausgewertet aus den offenen Ist-Daten.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap" rel="stylesheet">
+<style>
+/* Idee: Minuten sind Strecke. Jede Verspätung wird als Länge auf derselben Skala gezeichnet.
+   Layout: linksbündige Lesespalte, die Rangliste läuft breiter wie ein Fahrplan. */
+:root {
+  --papier: #f6f8f7;
+  --flaeche: #ffffff;
+  --tinte: #17202b;
+  --tinte-2: #4e5a66;
+  --tinte-3: #7d8994;
+  --linie: #d6dcdb;
+  --spur: #e4e9e8;
+  --signal: #bf8000;
+  --signal-flaeche: #fbefcf;
+  --fokus: #1d5fd1;
+  --schrift: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --papier: #10151b;
+    --flaeche: #161d25;
+    --tinte: #e8ecea;
+    --tinte-2: #a6b0b9;
+    --tinte-3: #6f7b87;
+    --linie: #27313b;
+    --spur: #222b35;
+    --signal: #ffc21f;
+    --signal-flaeche: #33290c;
+    --fokus: #8ab8ff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --papier: #10151b;
+  --flaeche: #161d25;
+  --tinte: #e8ecea;
+  --tinte-2: #a6b0b9;
+  --tinte-3: #6f7b87;
+  --linie: #27313b;
+  --spur: #222b35;
+  --signal: #ffc21f;
+  --signal-flaeche: #33290c;
+  --fokus: #8ab8ff;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--papier);
+  color: var(--tinte);
+  font-family: var(--schrift);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+a { color: inherit; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+:focus-visible { outline: 2px solid var(--fokus); outline-offset: 2px; border-radius: 4px; }
+.unsichtbar { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+h2, h3 { text-wrap: balance; }
+.zahl, .rang, .vsp, .zeit, .hwert, .bl-wert, td { font-variant-numeric: tabular-nums; }
+
+.seite { max-width: 1120px; margin: 0 auto; padding: 0 clamp(16px, 4vw, 40px) 72px; }
+main { transition: opacity .2s; }
+body.laedt main { opacity: .45; }
+
+/* Kopf */
+.kopf {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px 24px; padding: 18px 0 16px; border-bottom: 1px solid var(--linie);
+}
+.marke { display: flex; align-items: baseline; gap: 12px; color: inherit; text-decoration: none; }
+.marke-zahl { font-stretch: 62%; font-weight: 850; font-size: 2.125rem; line-height: 1; letter-spacing: -0.01em; }
+.marke-text { font-size: .9375rem; color: var(--tinte-2); }
+.tagwahl { display: flex; align-items: center; gap: 8px; }
+.knopf-rund {
+  width: 40px; height: 40px; flex: none; border-radius: 50%; cursor: pointer;
+  display: grid; place-items: center;
+  border: 1px solid var(--linie); background: var(--flaeche); color: var(--tinte);
+}
+.knopf-rund:hover:not(:disabled) { border-color: var(--tinte-3); }
+.knopf-rund:disabled { opacity: .35; cursor: default; }
+.waehler { position: relative; }
+.waehler select {
+  font: inherit; font-weight: 600; color: var(--tinte); background: var(--flaeche);
+  border: 1px solid var(--linie); border-radius: 20px; height: 40px;
+  padding: 0 36px 0 16px; appearance: none; -webkit-appearance: none; cursor: pointer;
+}
+.waehler svg { position: absolute; right: 14px; top: 50%; translate: 0 -50%; pointer-events: none; }
+
+.demo {
+  margin: 16px 0 0; padding: 12px 16px; border-radius: 10px;
+  background: var(--signal-flaeche); border: 1px solid var(--signal); font-size: .9375rem;
+}
+.demo strong { font-weight: 700; }
+
+/* Der Tag */
+.held { padding: 36px 0 0; }
+.held-kicker { margin: 0 0 6px; color: var(--tinte-2); font-size: 1.0625rem; }
+.held-zahl {
+  margin: 0; font-stretch: 62%; font-weight: 850; line-height: .82;
+  font-size: clamp(6.5rem, 26vw, 13rem); letter-spacing: -0.02em;
+}
+.held-zahl .prime { font-weight: 400; color: var(--tinte-3); }
+.held-linie {
+  margin: 18px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  font-size: clamp(1.25rem, 3.2vw, 1.75rem); font-weight: 650; line-height: 1.2;
+}
+.held-meta { margin: 8px 0 0; color: var(--tinte-2); max-width: 62ch; }
+.linie {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  padding: 1px 7px; border: 1.5px solid currentColor; border-radius: 6px;
+  font-weight: 750; font-stretch: 85%; font-size: .78em; line-height: 1.35;
+}
+
+.lineal { margin: 26px 0 0; max-width: 820px; padding-bottom: 26px; position: relative; }
+.lineal-spur { position: relative; height: 14px; background: var(--spur); border-radius: 0 7px 7px 0; }
+.lineal-fuell { position: absolute; inset: 0 auto 0 0; background: var(--signal); border-radius: 0 7px 7px 0; }
+.lineal .tick { position: absolute; top: -5px; height: 24px; width: 1px; background: var(--tinte-3); }
+.lineal .tick-text {
+  position: absolute; top: 22px; translate: -50% 0; font-size: .8125rem; color: var(--tinte-2); white-space: nowrap;
+}
+
+.analyse { margin: 28px 0 0; max-width: 64ch; font-size: 1.1875rem; line-height: 1.55; }
+
+.zahlen {
+  margin: 28px 0 0; display: grid; gap: 16px 32px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); max-width: 900px;
+}
+.zahlen div { border-top: 1px solid var(--linie); padding-top: 10px; }
+.zahlen dt { color: var(--tinte-2); font-size: .9375rem; }
+.zahlen dd { margin: 2px 0 0; font-size: 2.25rem; font-weight: 750; font-stretch: 75%; line-height: 1.1; }
+.zahlen .dazu { display: block; font-size: .875rem; font-weight: 400; font-stretch: 100%; color: var(--tinte-2); margin-top: 2px; }
+
+/* Abschnitte */
+.abschnitt { margin-top: 64px; }
+.abschnitt-kopf { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+h2 { margin: 0; font-size: 1.75rem; font-weight: 780; font-stretch: 75%; line-height: 1.15; }
+h3 { margin: 0 0 10px; font-size: 1.1875rem; font-weight: 720; font-stretch: 85%; }
+.unter { margin: 4px 0 0; color: var(--tinte-2); font-size: .9375rem; max-width: 62ch; }
+
+/* Filter */
+.filter { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 18px 0 8px; }
+.segment { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 22px; background: var(--spur); }
+.segment input { position: absolute; opacity: 0; pointer-events: none; }
+.segment label {
+  padding: 6px 14px; border-radius: 18px; cursor: pointer; font-size: .9375rem; font-weight: 600; color: var(--tinte-2);
+}
+.segment label .anz { font-weight: 400; color: var(--tinte-3); margin-left: 4px; }
+.segment input:checked + label { background: var(--flaeche); color: var(--tinte); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.segment input:focus-visible + label { outline: 2px solid var(--fokus); outline-offset: 1px; }
+
+/* Rangliste */
+.liste { list-style: none; margin: 8px 0 0; padding: 0; border-top: 1px solid var(--linie); }
+.fahrt { border-bottom: 1px solid var(--linie); }
+.fahrt summary {
+  list-style: none; cursor: pointer; padding: 14px 4px;
+  display: grid; column-gap: 14px; row-gap: 6px; align-items: center;
+  grid-template-columns: 1.75rem 5.25rem minmax(0, 1fr) 20px;
+  grid-template-areas: "rang vsp wer pfeil" ". . balken ." ". . wo .";
+}
+.fahrt summary::-webkit-details-marker { display: none; }
+.fahrt summary:hover { background: color-mix(in srgb, var(--spur) 55%, transparent); }
+.rang { grid-area: rang; color: var(--tinte-3); font-size: .9375rem; text-align: right; }
+.vsp { grid-area: vsp; font-stretch: 70%; font-weight: 800; font-size: 1.75rem; line-height: 1; }
+.wer { grid-area: wer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.wer .route { font-weight: 600; }
+.wer .nr, .wer .betr { color: var(--tinte-2); font-size: .875rem; }
+.balken { grid-area: balken; }
+.wo { grid-area: wo; color: var(--tinte-2); font-size: .9375rem; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.pfeil { grid-area: pfeil; color: var(--tinte-3); transition: rotate .15s; }
+.fahrt[open] .pfeil { rotate: 90deg; }
+.chip {
+  font-size: .8125rem; padding: 0 7px; border-radius: 10px; border: 1px solid var(--linie); color: var(--tinte-2); white-space: nowrap;
+}
+.spur { position: relative; display: block; height: 8px; background: var(--spur); border-radius: 0 4px 4px 0; }
+.fuell { position: absolute; inset: 0 auto 0 0; background: var(--signal); border-radius: 0 4px 4px 0; }
+.spur .stunde { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--papier); }
+@media (min-width: 860px) {
+  .fahrt summary {
+    grid-template-columns: 1.75rem 5.5rem minmax(0, 1.25fr) minmax(0, 1fr) 20px;
+    grid-template-areas: "rang vsp wer balken pfeil" ". . wo balken pfeil";
+  }
+}
+.mehr { margin: 16px 0 0; }
+.knopf {
+  font: inherit; font-weight: 600; cursor: pointer; color: var(--tinte); background: var(--flaeche);
+  border: 1px solid var(--linie); border-radius: 20px; padding: 8px 18px;
+}
+.knopf:hover { border-color: var(--tinte-3); }
+.leer { padding: 24px 4px; color: var(--tinte-2); }
+
+/* Verlauf einer Fahrt */
+.detail { padding: 4px 4px 22px; display: grid; gap: 14px; }
+@media (min-width: 860px) { .detail { padding-left: calc(1.75rem + 5.5rem + 28px); } }
+.halte { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-width: 720px; }
+.halt {
+  display: grid; grid-template-columns: 3rem minmax(0, 1fr) auto; column-gap: 10px; row-gap: 3px;
+  grid-template-areas: "zeit name wert" ". balken balken"; align-items: center; font-size: .9375rem; padding: 2px 0;
+}
+.halt .zeit { grid-area: zeit; }
+.halt .name { grid-area: name; }
+.halt .hwert { grid-area: wert; }
+.halt > .spur { grid-area: balken; }
+@media (min-width: 640px) {
+  .halt { grid-template-columns: 3.25rem minmax(0, 11rem) minmax(0, 1fr) 6.5rem; grid-template-areas: "zeit name balken wert"; padding: 0; }
+}
+.halt .zeit { color: var(--tinte-2); }
+.halt .name { overflow-wrap: anywhere; }
+.halt .hwert { text-align: right; color: var(--tinte-2); }
+.halt.max .name, .halt.max .hwert { font-weight: 750; color: var(--tinte); }
+.halt.ausfall .name { text-decoration: line-through; color: var(--tinte-3); }
+.halt .spur { height: 6px; border-radius: 0 3px 3px 0; }
+.halt .fuell { border-radius: 0 3px 3px 0; }
+.fakten { margin: 0; color: var(--tinte-2); font-size: .9375rem; max-width: 70ch; }
+
+/* Wann, wo, wer */
+.drei { display: grid; gap: 40px 48px; grid-template-columns: 1fr; }
+@media (min-width: 900px) { .drei { grid-template-columns: 1.3fr 1fr 1fr; } }
+.grafik { margin-top: 14px; position: relative; }
+.grafik svg { display: block; width: 100%; overflow: visible; }
+.grafik text { font-family: var(--schrift); font-size: 12px; fill: var(--tinte-2); }
+.balkenliste { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
+.balkenliste li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline; }
+.balkenliste .bl-name { overflow-wrap: anywhere; }
+.balkenliste .bl-name small { color: var(--tinte-2); font-size: .8125rem; margin-left: 6px; }
+.balkenliste .bl-wert { font-weight: 700; text-align: right; white-space: nowrap; }
+.balkenliste .bl-wert small { font-weight: 400; color: var(--tinte-2); }
+.balkenliste .spur { grid-column: 1 / -1; height: 6px; border-radius: 0 3px 3px 0; }
+.balkenliste .fuell { border-radius: 0 3px 3px 0; }
+.tabelle { margin-top: 12px; font-size: .875rem; color: var(--tinte-2); }
+.tabelle summary { cursor: pointer; width: max-content; }
+.tabelle table { border-collapse: collapse; margin-top: 8px; }
+.tabelle th, .tabelle td { padding: 2px 12px 2px 0; text-align: left; border-bottom: 1px solid var(--linie); font-weight: 400; }
+.tabelle td:last-child { text-align: right; }
+
+.zwei { display: grid; gap: 40px 48px; grid-template-columns: 1fr; margin-top: 36px; }
+@media (min-width: 760px) { .zwei { grid-template-columns: 1fr 1fr; } }
+
+/* Methode */
+.methode { margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--linie); color: var(--tinte-2); font-size: .9375rem; }
+.methode-spalten { display: grid; gap: 24px 48px; grid-template-columns: 1fr; }
+@media (min-width: 760px) { .methode-spalten { grid-template-columns: 1fr 1fr; } }
+.methode h2 { font-size: 1.25rem; color: var(--tinte); margin-bottom: 8px; }
+.methode p { margin: 0 0 10px; max-width: 64ch; }
+
+/* Hinweis bei leerem Stand / Fehler */
+.hinweis { padding: 64px 0; max-width: 56ch; }
+.hinweis h2 { font-size: 2rem; }
+.hinweis p { color: var(--tinte-2); font-size: 1.0625rem; }
+
+/* Tooltip */
+.tip {
+  position: fixed; z-index: 10; pointer-events: none; min-width: 120px; max-width: 260px;
+  padding: 8px 10px; border-radius: 8px; background: var(--tinte); color: var(--papier);
+  font-size: .875rem; line-height: 1.35; box-shadow: 0 4px 14px rgb(0 0 0 / .18);
+}
+.tip strong { display: block; font-size: 1rem; }
+.tip span { display: block; opacity: .8; }
+
+@media (prefers-reduced-motion: reduce) {
+  main, .pfeil { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="seite">
+  <header class="kopf">
+    <a class="marke" href="#" id="marke">
+      <span class="marke-zahl">+60′</span>
+      <span class="marke-text">Die grössten Verspätungen im Schweizer ÖV</span>
+    </a>
+    <nav class="tagwahl" aria-label="Tag wählen" id="tagwahl" hidden>
+      <button type="button" class="knopf-rund" id="zurueck" aria-label="Vorheriger Tag">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span class="waehler">
+        <label class="unsichtbar" for="datum">Tag</label>
+        <select id="datum"></select>
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 4.5 3.5 3.5 3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      <button type="button" class="knopf-rund" id="vor" aria-label="Nächster Tag">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </nav>
+  </header>
+
+  <p class="demo" id="demo" hidden><strong>Vorschau mit Beispieldaten.</strong> Alle Zahlen auf dieser Seite sind zufällig erzeugt und keine echten Messwerte. Echte Auswertungen erscheinen nach dem ersten automatischen Lauf.</p>
+
+  <main id="inhalt" aria-live="polite">
+    <noscript><p class="leer">Diese Seite braucht JavaScript, um die Tagesdaten zu laden.</p></noscript>
+  </main>
+
+  <footer class="methode" id="methode">
+    <div class="methode-spalten">
+      <div>
+        <h2>So wird gezählt</h2>
+        <p>Eine Fahrt kommt in die Rangliste, wenn sie an mindestens einem Schweizer Halt 60 Minuten oder mehr zu spät ankam oder abfuhr. Massgebend ist die grösste Verspätung entlang der Strecke.</p>
+        <p>Gezählt werden gemessene und geschätzte Ist-Zeiten. Reine Prognosen, Durchfahrten ohne Halt, Halte im Ausland und offensichtliche Datenfehler (mehr als 12 Stunden Abweichung) bleiben draussen. Als ausgefallen gilt eine Fahrt, die an allen Schweizer Halten als ausgefallen gemeldet ist.</p>
+      </div>
+      <div>
+        <h2>Quelle</h2>
+        <p id="quelle">Daten: <a href="https://data.opentransportdata.swiss/dataset/ist-daten-v2">opentransportdata.swiss, Ist-Daten</a> (Open Data, Quellenangabe Pflicht). Die Datei des Vortags erscheint jeweils am Morgen und wird automatisch ausgewertet.</p>
+        <p>Unabhängige Auswertung offener Daten. Keine Verbindung zu den Transportunternehmen.</p>
+        <p id="stand"></p>
+      </div>
+    </div>
+  </footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+"use strict";
+const $ = (s, root = document) => root.querySelector(s);
+const PRIME = "′";
+const SCHWELLEN = [[60, "ab 60′"], [90, "ab 90′"], [120, "ab 2 Std."], [180, "ab 3 Std."]];
+const TAGE_KURZ = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+const S = { index: null, cache: new Map(), tag: null, produkt: "Alle", schwelle: 60, sichtbar: 20 };
+
+/* ---------- Helfer ---------- */
+function el(tag, attrs = {}, ...kinder) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") n.className = v;
+    else if (k === "text") n.textContent = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kinder.flat()) {
+    if (k == null || k === false) continue;
+    n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  }
+  return n;
+}
+const NS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs = {}, ...kinder) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null) n.setAttribute(k, v);
+  for (const k of kinder.flat()) if (k) n.append(k);
+  return n;
+}
+const zahl = (n) => Math.round(n).toLocaleString("de-CH");
+const vsp = (m) => `+${m}${PRIME}`;
+function dauer(m) {
+  const h = Math.floor(m / 60), r = m % 60;
+  if (!h) return `${r} Min.`;
+  return r ? `${h} Std. ${r} Min.` : `${h} Std.`;
+}
+function kurzDatum(iso) {
+  const d = new Date(`${iso}T12:00:00`);
+  return `${TAGE_KURZ[d.getDay()]} ${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.`;
+}
+function plusMinuten(hhmm, m) {
+  if (!hhmm) return null;
+  const [h, mi] = hhmm.split(":").map(Number);
+  const t = (h * 60 + mi + m) % 1440;
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+function vortagIso(iso) {
+  const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+/* Eine Skala für den ganzen Tag: mindestens 4 Stunden, sonst bis zur nächsten vollen Stunde */
+const skala = () => Math.max(240, Math.ceil(((S.tag.liste[0] || {}).max || 60) / 60) * 60);
+function spur(wert, max, minuten = true) {
+  const s = el("span", { class: "spur", "aria-hidden": "true" });
+  s.append(el("span", { class: "fuell", style: `width:${Math.min(100, (wert / max) * 100).toFixed(2)}%` }));
+  if (minuten) for (let h = 60; h < max; h += 60) s.append(el("span", { class: "stunde", style: `left:${((h / max) * 100).toFixed(2)}%` }));
+  return s;
+}
+function linieBadge(text) { return el("span", { class: "linie", text }); }
+
+/* ---------- Tooltip ---------- */
+const tip = $("#tip");
+function zeigeTip(ereignis, ziel, zeilen) {
+  tip.replaceChildren(...zeilen.map(([wert, text]) => el("div", {}, el("strong", { text: wert }), text ? el("span", { text }) : null)));
+  tip.hidden = false;
+  const r = ziel.getBoundingClientRect();
+  let x = ereignis && "clientX" in ereignis && ereignis.clientX ? ereignis.clientX : r.left + r.width / 2;
+  let y = ereignis && "clientY" in ereignis && ereignis.clientY ? ereignis.clientY : r.top;
+  const b = tip.getBoundingClientRect();
+  x = Math.min(window.innerWidth - b.width - 8, Math.max(8, x - b.width / 2));
+  y = y - b.height - 14 < 8 ? y + 18 : y - b.height - 14;
+  tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+}
+function versteckeTip() { tip.hidden = true; }
+function tipFuer(ziel, zeilen, beiKlick) {
+  ziel.addEventListener("pointerenter", (e) => zeigeTip(e, ziel, zeilen));
+  ziel.addEventListener("pointermove", (e) => zeigeTip(e, ziel, zeilen));
+  ziel.addEventListener("pointerleave", versteckeTip);
+  ziel.addEventListener("focus", () => zeigeTip(null, ziel, zeilen));
+  ziel.addEventListener("blur", versteckeTip);
+  if (beiKlick) {
+    ziel.addEventListener("click", beiKlick);
+    ziel.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); beiKlick(); } });
+  }
+}
+
+/* ---------- Laden ---------- */
+async function holeJSON(url) {
+  const r = await fetch(url, { cache: "no-cache" });
+  if (!r.ok) throw Object.assign(new Error(`${url}: ${r.status}`), { status: r.status });
+  return r.json();
+}
+async function ladeTag(datum) {
+  if (!S.cache.has(datum)) S.cache.set(datum, await holeJSON(`data/tage/${datum}.json`));
+  return S.cache.get(datum);
+}
+function zeigeHinweis(titel, text) {
+  $("#inhalt").replaceChildren(el("section", { class: "hinweis" }, el("h2", { text: titel }), el("p", { text })));
+}
+function ausHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  return S.index.tage.some((t) => t.datum === h) ? h : S.index.tage.at(-1).datum;
+}
+async function oeffne(datum) {
+  if (S.tag && S.tag.datum === datum) return;
+  document.body.classList.add("laedt");
+  try {
+    S.tag = await ladeTag(datum);
+  } catch (e) {
+    zeigeHinweis("Dieser Tag konnte nicht geladen werden.", "Lade die Seite neu. Hilft das nicht, fehlt die Datei für diesen Tag.");
+    return;
+  } finally {
+    document.body.classList.remove("laedt");
+  }
+  S.sichtbar = 20;
+  if (location.hash.slice(1) !== datum) history.replaceState(null, "", `#${datum}`);
+  zeichne();
+}
+
+async function start() {
+  try {
+    S.index = await holeJSON("data/index.json");
+  } catch (e) {
+    if (e.status === 404) {
+      zeigeHinweis("Noch keine Analyse vorhanden.",
+        "Der erste automatische Lauf holt die letzten 14 Tage. Das dauert rund 20 Minuten, danach erscheint hier die Rangliste.");
+      return;
+    }
+    zeigeHinweis("Die Daten konnten nicht geladen werden.",
+      "Lade die Seite neu. Falls das nicht hilft, prüfe auf GitHub unter «Actions», ob der letzte Lauf geklappt hat.");
+    return;
+  }
+  if (S.index.demo) {
+    $("#demo").hidden = false;
+    $("#quelle").textContent = "In dieser Vorschau sind alle Werte zufällig erzeugt. Im Betrieb stammen die Daten von opentransportdata.swiss (Ist-Daten, Open Data, Quellenangabe Pflicht).";
+  }
+  if (!S.index.tage || !S.index.tage.length) {
+    zeigeHinweis("Noch keine Analyse vorhanden.",
+      "Der erste automatische Lauf holt die letzten 14 Tage. Das dauert rund 20 Minuten, danach erscheint hier die Rangliste.");
+    return;
+  }
+  const wahl = $("#datum");
+  for (const t of [...S.index.tage].reverse()) wahl.append(el("option", { value: t.datum, text: kurzDatum(t.datum) + t.datum.slice(0, 4) }));
+  wahl.addEventListener("change", () => oeffne(wahl.value));
+  $("#zurueck").addEventListener("click", () => schritt(-1));
+  $("#vor").addEventListener("click", () => schritt(1));
+  $("#marke").addEventListener("click", (e) => { e.preventDefault(); oeffne(S.index.tage.at(-1).datum); });
+  document.addEventListener("keydown", (e) => {
+    if (document.activeElement && document.activeElement !== document.body) return;
+    if (e.key === "ArrowLeft") schritt(-1);
+    if (e.key === "ArrowRight") schritt(1);
+  });
+  window.addEventListener("hashchange", () => oeffne(ausHash()));
+  let warte;
+  new ResizeObserver(() => { clearTimeout(warte); warte = setTimeout(() => { if (S.tag) { zeichneWann(); zeichneMonat(); } }, 120); }).observe($("#inhalt"));
+  $("#tagwahl").hidden = false;
+  await oeffne(ausHash());
+}
+function schritt(richtung) {
+  const i = S.index.tage.findIndex((t) => t.datum === S.tag.datum) + richtung;
+  if (i >= 0 && i < S.index.tage.length) oeffne(S.index.tage[i].datum);
+}
+
+/* ---------- Zeichnen ---------- */
+function gefiltert() {
+  return S.tag.liste.filter((t) => (S.produkt === "Alle" || t.produkt === S.produkt) && t.max >= S.schwelle);
+}
+
+function zeichne() {
+  const t = S.tag;
+  const i = S.index.tage.findIndex((x) => x.datum === t.datum);
+  $("#datum").value = t.datum;
+  $("#zurueck").disabled = i <= 0;
+  $("#vor").disabled = i >= S.index.tage.length - 1;
+
+  const inhalt = $("#inhalt");
+  inhalt.replaceChildren(
+    zeichneTag(),
+    el("section", { class: "abschnitt", "aria-labelledby": "rl-titel" },
+      el("div", { class: "abschnitt-kopf" },
+        el("h2", { id: "rl-titel", text: "Rangliste" }),
+        el("p", { class: "unter", id: "rl-info" })),
+      zeichneFilter(),
+      el("ol", { class: "liste", id: "liste" }),
+      el("p", { class: "mehr" }, el("button", { type: "button", class: "knopf", id: "mehr", onclick: () => { S.sichtbar += 20; zeichneListe(); } }))),
+    el("section", { class: "abschnitt drei", "aria-label": "Wann, wo und wer" },
+      el("div", {}, el("h2", { text: "Wann" }), el("p", { class: "unter", text: "Uhrzeit, zu der die Fahrten am stärksten verspätet waren" }),
+        el("div", { class: "grafik", id: "wann" }), el("details", { class: "tabelle", id: "wann-tabelle" })),
+      el("div", {}, el("h2", { text: "Wo" }), el("p", { class: "unter", id: "wo-unter" }), el("ol", { class: "balkenliste", id: "wo" })),
+      el("div", {}, el("h2", { text: "Wer" }), el("p", { class: "unter", text: "Betreiber mit den meisten Fahrten in der Liste" }), el("ol", { class: "balkenliste", id: "wer" }))),
+    zeichneMonatAbschnitt());
+  zeichneListe();
+  zeichneMonat();
+
+  const q = t.quelle || {};
+  $("#stand").textContent = S.index.demo
+    ? "Stand: Beispieldaten, zufällig erzeugt."
+    : `Datei ${q.datei || "–"}, ${zahl(q.zeilen || 0)} Zeilen, ausgewertet am ${new Date(t.erstellt).toLocaleString("de-CH", { dateStyle: "medium", timeStyle: "short" })} Uhr.`
+      + (t.basis === "inkl. Prognosen" ? " An diesem Tag gab es zu wenige gemessene Zeiten, deshalb zählen auch Prognosen." : "");
+}
+
+function zeichneTag() {
+  const t = S.tag, k = t.kennzahlen, top = t.liste[0];
+  const held = el("div", { class: "held" });
+  if (top) {
+    const max = skala();
+    const lineal = el("div", { class: "lineal", role: "img", "aria-label": `Verspätung von ${dauer(top.max)} auf einer Skala bis ${max / 60} Stunden` },
+      el("div", { class: "lineal-spur" }, el("div", { class: "lineal-fuell", style: `width:${((top.max / max) * 100).toFixed(2)}%` })));
+    const schritte = max / 60 > 6 ? 2 : 1;
+    for (let h = 1; h * 60 <= max; h++) {
+      const x = `${((h * 60 / max) * 100).toFixed(2)}%`;
+      lineal.append(el("span", { class: "tick", style: `left:${x}` }));
+      if (h % schritte === 0 && h * 60 < max) lineal.append(el("span", { class: "tick-text", style: `left:${x}`, text: `${h} Std.` }));
+    }
+    const ist = plusMinuten(top.um, top.max);
+    held.append(
+      el("p", { class: "held-kicker", text: `Grösste Verspätung am ${t.titel}` }),
+      el("p", { class: "held-zahl" }, `+${top.max}`, el("span", { class: "prime", text: PRIME })),
+      el("p", { class: "held-linie" }, linieBadge(top.linie), top.von && top.nach ? el("span", { text: `${top.von} – ${top.nach}` }) : null),
+      el("p", { class: "held-meta", text:
+        `Gemessen in ${top.wo}` + (top.um ? `: geplant ${top.um} Uhr, tatsächlich ${ist} Uhr.` : ".")
+        + ` Betreiber ${top.betreiber}` + (top.nr ? `, Zug ${top.nr}.` : ".") }),
+      lineal);
+  } else {
+    held.append(
+      el("p", { class: "held-kicker", text: t.titel }),
+      el("p", { class: "held-zahl" }, "0"),
+      el("p", { class: "held-linie", text: "Fahrten mit mehr als einer Stunde Verspätung" }),
+      el("p", { class: "held-meta", text: k.max ? `Die grösste Verspätung des Tages betrug ${dauer(k.max)}.` : "" }));
+  }
+
+  const vortag = S.index.tage.find((x) => x.datum === vortagIso(t.datum));
+  let vergleich = null;
+  if (vortag) {
+    const d = k.ab60 - vortag.ab60;
+    vergleich = d === 0 ? "gleich viele wie am Vortag" : `${zahl(Math.abs(d))} ${d > 0 ? "mehr" : "weniger"} als am Vortag`;
+  }
+  const feld = (titel, wert, dazu) => el("div", {}, el("dt", { text: titel }), el("dd", { class: "zahl" }, wert, dazu ? el("span", { class: "dazu", text: dazu }) : null));
+  const zahlen = el("dl", { class: "zahlen" },
+    feld(`Fahrten ab 60${PRIME}`, zahl(k.ab60), vergleich),
+    feld("Davon ab 2 Stunden", zahl(k.ab120), null),
+    feld("Ganz ausgefallen", zahl(k.ausfaelle), k.teilausfaelle ? `dazu ${zahl(k.teilausfaelle)} teilweise` : null),
+    feld("Anteil", k.ab60 ? `1 von ${zahl(k.fahrten_gemessen / k.ab60)}` : "–", "aller gemessenen Fahrten"));
+
+  const text = t.text.startsWith(`${t.titel}: `) ? t.text.slice(t.titel.length + 2) : t.text;
+  return el("section", { "aria-label": "Zusammenfassung des Tages" }, held,
+    el("p", { class: "analyse", text: text.charAt(0).toUpperCase() + text.slice(1) }), zahlen);
+}
+
+function zeichneFilter() {
+  const produkte = new Map();
+  for (const f of S.tag.liste) produkte.set(f.produkt, (produkte.get(f.produkt) || 0) + 1);
+  const ordnung = ["Zug", "Bus", "Tram"];
+  const namen = ["Alle", ...[...produkte.keys()].sort((a, b) => ((ordnung.indexOf(a) + 1) || 9) - ((ordnung.indexOf(b) + 1) || 9))];
+  if (!namen.includes(S.produkt)) S.produkt = "Alle";
+  const gruppe = (id, label, optionen, aktiv, setze) => {
+    const g = el("div", { class: "segment", role: "radiogroup", "aria-label": label });
+    optionen.forEach(([wert, text, anz], i) => {
+      const iid = `${id}-${i}`;
+      g.append(
+        el("input", { type: "radio", name: id, id: iid, value: String(wert), checked: wert === aktiv,
+          onchange: () => { setze(wert); S.sichtbar = 20; zeichneListe(); } }),
+        el("label", { for: iid }, text, anz != null ? el("span", { class: "anz", text: zahl(anz) }) : null));
+    });
+    return g;
+  };
+  return el("div", { class: "filter" },
+    gruppe("produkt", "Verkehrsmittel", namen.map((n) => [n, n, n === "Alle" ? S.tag.liste.length : produkte.get(n)]), S.produkt, (w) => { S.produkt = w; }),
+    gruppe("schwelle", "Mindestverspätung", SCHWELLEN.map(([w, t]) => [w, t, null]), S.schwelle, (w) => { S.schwelle = w; }));
+}
+
+function zeichneListe() {
+  const liste = gefiltert(), max = skala(), ziel = $("#liste");
+  const total = S.tag.kennzahlen.ab60;
+  $("#rl-info").textContent = `${zahl(liste.length)} ${liste.length === 1 ? "Fahrt" : "Fahrten"}, sortiert nach der grössten Verspätung`
+    + (total > S.tag.liste.length ? `. Gespeichert sind die ${zahl(S.tag.liste.length)} grössten von ${zahl(total)}.` : ".");
+  ziel.replaceChildren();
+  if (!liste.length) ziel.append(el("li", { class: "leer", text: "Keine Fahrt erfüllt diesen Filter. Wähle eine tiefere Schwelle oder ein anderes Verkehrsmittel." }));
+  for (const f of liste.slice(0, S.sichtbar)) ziel.append(fahrtZeile(f, max));
+  const rest = liste.length - S.sichtbar, knopf = $("#mehr");
+  knopf.hidden = rest <= 0;
+  knopf.textContent = `Weitere ${Math.min(20, rest)} anzeigen (noch ${zahl(rest)})`;
+  zeichneWann(liste); zeichneWo(liste); zeichneWer(liste);
+}
+
+function fahrtZeile(f, max) {
+  const chips = [];
+  if (f.int) chips.push("international");
+  if (f.teil) chips.push("teilweise ausgefallen");
+  if (f.zusatz) chips.push("Extrafahrt");
+  const details = el("details", {},
+    el("summary", {},
+      el("span", { class: "rang", text: String(f.r) }),
+      el("span", { class: "vsp", text: vsp(f.max) }),
+      el("span", { class: "wer" }, linieBadge(f.linie), f.von && f.nach ? el("span", { class: "route", text: `${f.von} – ${f.nach}` }) : null,
+        el("span", { class: "betr", text: f.betreiber })),
+      el("span", { class: "balken" }, spur(f.max, max)),
+      el("span", { class: "wo" }, el("span", { text: f.um ? `in ${f.wo}, geplant ${f.um}` : `in ${f.wo}` }), chips.map((c) => el("span", { class: "chip", text: c }))),
+      svgPfeil()));
+  details.addEventListener("toggle", () => {
+    if (details.open && !details.querySelector(".detail")) details.append(fahrtDetail(f, max));
+  }, { once: false });
+  return el("li", { class: "fahrt" }, details);
+}
+function svgPfeil() {
+  return sv("svg", { class: "pfeil", width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
+    sv("path", { d: "m6 3 5 5-5 5", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+}
+function fahrtDetail(f, max) {
+  const halte = el("ol", { class: "halte", "aria-label": "Verlauf entlang der Strecke in der Schweiz" });
+  let maxGezeigt = false;
+  for (const [name, zeit, v, flag] of f.halte) {
+    const istMax = !maxGezeigt && v === f.max && name === f.wo;
+    if (istMax) maxGezeigt = true;
+    halte.append(el("li", { class: `halt${istMax ? " max" : ""}${flag === "A" ? " ausfall" : ""}` },
+      el("span", { class: "zeit", text: zeit || "" }),
+      el("span", { class: "name", text: name }),
+      v != null && v > 0 ? spur(v, max) : el("span", { class: "spur", "aria-hidden": "true" }),
+      el("span", { class: "hwert", text: flag === "A" ? "fällt aus" : v == null ? "keine Messung" : v > 0 ? vsp(v) : "pünktlich" })));
+  }
+  const fakten = [];
+  if (f.ende != null) fakten.push(`Ankunft am letzten Schweizer Halt ${f.ende > 0 ? vsp(f.ende) : "pünktlich"}.`);
+  if (f.n60 > 1) fakten.push(`An ${f.n60} Halten über 60${PRIME}.`);
+  if (f.int) fakten.push("Die Fahrt beginnt oder endet im Ausland; gezählt werden nur Schweizer Halte.");
+  if (f.nr) fakten.push(`Zug ${f.nr}, Betreiber ${f.betreiber_name}.`);
+  else fakten.push(`Betreiber ${f.betreiber_name}.`);
+  return el("div", { class: "detail" }, halte, el("p", { class: "fakten", text: fakten.join(" ") }));
+}
+
+function zeichneWann(liste = gefiltert()) {
+  const box = $("#wann");
+  if (!box) return;
+  const werte = Array(24).fill(0);
+  for (const f of liste) if (f.um) werte[Number(f.um.slice(0, 2)) % 24]++;
+  const B = Math.max(280, box.clientWidth), H = 170, oben = 14, unten = 24, links = 26;
+  const ymax = Math.max(4, Math.ceil(Math.max(...werte) / 4) * 4);
+  const breite = (B - links) / 24, sb = Math.min(24, breite - 2);
+  const y = (v) => oben + (H - oben - unten) * (1 - v / ymax);
+  const svg = sv("svg", { viewBox: `0 0 ${B} ${H}`, height: H, role: "img", "aria-label": "Fahrten über der Schwelle nach Uhrzeit" });
+  for (const g of [0, ymax / 2, ymax]) {
+    svg.append(sv("line", { x1: links, x2: B, y1: y(g), y2: y(g), stroke: "var(--linie)", "stroke-width": 1 }));
+    svg.append(sv("text", { x: links - 6, y: y(g) + 4, "text-anchor": "end" }, document.createTextNode(String(g))));
+  }
+  werte.forEach((v, h) => {
+    const x = links + h * breite + (breite - sb) / 2;
+    if (v) {
+      const yy = y(v), r = Math.min(4, (H - unten - yy) / 2, sb / 2);
+      svg.append(sv("path", { d: `M${x},${H - unten} V${yy + r} q0,-${r} ${r},-${r} h${sb - 2 * r} q${r},0 ${r},${r} V${H - unten} Z`, fill: "var(--signal)" }));
+    }
+    const ziel = sv("rect", { x: links + h * breite, y: oben, width: breite, height: H - oben - unten, fill: "transparent", tabindex: 0,
+      "aria-label": `${h} bis ${h + 1} Uhr: ${v} Fahrten` });
+    tipFuer(ziel, [[`${v} ${v === 1 ? "Fahrt" : "Fahrten"}`, `${h}–${h + 1} Uhr`]]);
+    svg.append(ziel);
+    if (h % 6 === 0) svg.append(sv("text", { x: links + h * breite + breite / 2, y: H - 6, "text-anchor": "middle" }, document.createTextNode(h === 0 ? "0 Uhr" : String(h))));
+  });
+  svg.append(sv("line", { x1: links, x2: B, y1: H - unten, y2: H - unten, stroke: "var(--tinte-3)", "stroke-width": 1 }));
+  box.replaceChildren(svg);
+  const tabelle = $("#wann-tabelle");
+  tabelle.replaceChildren(el("summary", { text: "Werte als Tabelle" }),
+    el("table", {}, el("thead", {}, el("tr", {}, el("th", { text: "Stunde" }), el("th", { text: "Fahrten" }))),
+      el("tbody", {}, werte.map((v, h) => el("tr", {}, el("td", { text: `${h}–${h + 1} Uhr` }), el("td", { text: String(v) }))))));
+}
+
+function zeichneWo(liste) {
+  const zaehler = new Map(), spitze = new Map();
+  for (const f of liste) {
+    const gesehen = new Set();
+    for (const [name, , v] of f.halte) {
+      if (v == null || v < S.schwelle) continue;
+      spitze.set(name, Math.max(spitze.get(name) || 0, v));
+      if (!gesehen.has(name)) { gesehen.add(name); zaehler.set(name, (zaehler.get(name) || 0) + 1); }
+    }
+  }
+  const top = [...zaehler.entries()]
+    .sort((a, b) => b[1] - a[1] || spitze.get(b[0]) - spitze.get(a[0]) || a[0].localeCompare(b[0], "de")).slice(0, 8);
+  $("#wo-unter").textContent = `Halte, an denen am meisten Fahrten ${S.schwelle >= 120 ? `über ${S.schwelle / 60} Stunden` : `über ${S.schwelle}${PRIME}`} zu spät waren`;
+  balkenListe($("#wo"), top.map(([n, a]) => ({ name: n, wert: a })), (x) => zahl(x.wert));
+}
+function zeichneWer(liste) {
+  const zaehler = new Map();
+  for (const f of liste) zaehler.set(f.betreiber, (zaehler.get(f.betreiber) || 0) + 1);
+  const alle = new Map((S.tag.betreiber || []).map((b) => [b.kurz, b.fahrten]));
+  const top = [...zaehler.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "de")).slice(0, 8);
+  balkenListe($("#wer"), top.map(([n, a]) => ({ name: n, wert: a, von: alle.get(n) })),
+    (x) => [zahl(x.wert), x.von ? el("small", { text: ` von ${zahl(x.von)}` }) : null]);
+}
+function balkenListe(ziel, eintraege, wertText) {
+  ziel.replaceChildren();
+  if (!eintraege.length) { ziel.append(el("li", { class: "leer", text: "Keine Einträge für diesen Filter." })); return; }
+  const max = Math.max(...eintraege.map((x) => x.wert));
+  for (const x of eintraege) {
+    const name = el("span", { class: "bl-name" }, x.badge ? linieBadge(x.badge) : null, x.badge ? " " : null, x.name, x.klein ? el("small", { text: x.klein }) : null);
+    ziel.append(el("li", {}, name, el("span", { class: "bl-wert" }, wertText(x)), spur(x.wert, max, false)));
+  }
+}
+
+function zeichneMonatAbschnitt() {
+  return el("section", { class: "abschnitt", "aria-labelledby": "m-titel" },
+    el("h2", { id: "m-titel", text: "Die letzten 30 Tage" }),
+    el("p", { class: "unter", text: `Fahrten ab 60${PRIME} pro Tag, alle Verkehrsmittel. Tippe auf einen Tag, um ihn zu öffnen.` }),
+    el("div", { class: "grafik", id: "monat" }),
+    el("details", { class: "tabelle", id: "monat-tabelle" }),
+    el("div", { class: "zwei" },
+      el("div", {}, el("h3", { text: "Wiederholungstäter" }), el("p", { class: "unter", text: "Linien, die am häufigsten in der Liste standen" }), el("ol", { class: "balkenliste", id: "linien30" })),
+      el("div", {}, el("h3", { text: "Brennpunkte" }), el("p", { class: "unter", text: `Halte mit den meisten Fahrten über 60${PRIME}` }), el("ol", { class: "balkenliste", id: "halte30" }))));
+}
+function zeichneMonat() {
+  const box = $("#monat");
+  if (!box) return;
+  const tage = S.index.tage.slice(-30);
+  const B = Math.max(280, box.clientWidth), H = 180, oben = 22, unten = 26, links = 30;
+  const hoechst = Math.max(...tage.map((t) => t.ab60));
+  const ymax = hoechst <= 4 ? 4 : hoechst <= 10 ? 10 : Math.ceil(hoechst / 10) * 10;
+  const breite = (B - links) / Math.max(tage.length, 7), sb = Math.max(4, Math.min(24, breite - 4));
+  const y = (v) => oben + (H - oben - unten) * (1 - v / ymax);
+  const svg = sv("svg", { viewBox: `0 0 ${B} ${H}`, height: H, role: "img", "aria-label": "Fahrten ab 60 Minuten Verspätung pro Tag" });
+  for (const g of [0, ymax / 2, ymax]) {
+    svg.append(sv("line", { x1: links, x2: B, y1: y(g), y2: y(g), stroke: "var(--linie)", "stroke-width": 1 }));
+    svg.append(sv("text", { x: links - 6, y: y(g) + 4, "text-anchor": "end" }, document.createTextNode(zahl(g))));
+  }
+  const spitze = tage.reduce((a, b) => (b.ab60 > a.ab60 ? b : a), tage[0]);
+  tage.forEach((t, i) => {
+    const aktiv = t.datum === S.tag.datum;
+    const x = links + i * breite + (breite - sb) / 2;
+    if (t.ab60) {
+      const yy = y(t.ab60), r = Math.min(4, (H - unten - yy) / 2, sb / 2);
+      svg.append(sv("path", { d: `M${x},${H - unten} V${yy + r} q0,-${r} ${r},-${r} h${sb - 2 * r} q${r},0 ${r},${r} V${H - unten} Z`,
+        fill: aktiv ? "var(--signal)" : "var(--tinte-3)", opacity: aktiv ? 1 : 0.55 }));
+    }
+    if (aktiv || t === spitze) {
+      svg.append(sv("text", { x: x + sb / 2, y: y(t.ab60) - 6, "text-anchor": "middle", "font-weight": aktiv ? 700 : 400, fill: aktiv ? "var(--tinte)" : "var(--tinte-2)" },
+        document.createTextNode(zahl(t.ab60))));
+    }
+    const zeilen = [[`${zahl(t.ab60)} ${t.ab60 === 1 ? "Fahrt" : "Fahrten"} ab 60${PRIME}`, kurzDatum(t.datum) + t.datum.slice(0, 4)]];
+    if (t.top) zeilen.push([`${t.top.linie} ${vsp(t.top.max)}`, `${t.top.von} – ${t.top.nach}`]);
+    const ziel = sv("rect", { x: links + i * breite, y: 0, width: breite, height: H - unten, fill: "transparent", tabindex: 0, role: "button",
+      style: "cursor:pointer", "aria-label": `${kurzDatum(t.datum)}: ${t.ab60} Fahrten ab 60 Minuten. Tag öffnen.` });
+    tipFuer(ziel, zeilen, () => { versteckeTip(); oeffne(t.datum); });
+    svg.append(ziel);
+    const tagLabel = (tage.length - 1 - i) % 7 === 0;
+    if (tagLabel) svg.append(sv("text", { x: x + sb / 2, y: H - 7, "text-anchor": "middle" }, document.createTextNode(kurzDatum(t.datum).slice(3))));
+  });
+  svg.append(sv("line", { x1: links, x2: B, y1: H - unten, y2: H - unten, stroke: "var(--tinte-3)", "stroke-width": 1 }));
+  box.replaceChildren(svg);
+
+  $("#monat-tabelle").replaceChildren(el("summary", { text: "Werte als Tabelle" }),
+    el("table", {}, el("thead", {}, el("tr", {}, el("th", { text: "Tag" }), el("th", { text: "Grösste Verspätung" }), el("th", { text: `Fahrten ab 60${PRIME}` }))),
+      el("tbody", {}, [...tage].reverse().map((t) => el("tr", {}, el("td", { text: kurzDatum(t.datum) + t.datum.slice(0, 4) }),
+        el("td", { text: t.top ? `${t.top.linie}, ${vsp(t.top.max)}` : "–" }), el("td", { text: zahl(t.ab60) }))))));
+
+  balkenListe($("#linien30"), (S.index.linien_30 || []).slice(0, 8).map((l) => ({ name: l.route || "", badge: l.linie, klein: l.betreiber, wert: l.anzahl })),
+    (x) => `${zahl(x.wert)}×`);
+  balkenListe($("#halte30"), (S.index.halte_30 || []).slice(0, 8).map((h) => ({ name: h.halt, wert: h.anzahl })), (x) => `${zahl(x.wert)}×`);
+}
+
+start();
+</script>
+</body>
+</html>
