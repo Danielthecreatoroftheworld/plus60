@@ -221,6 +221,7 @@ h3 { margin: 0 0 10px; font-size: 1.1875rem; font-weight: 720; font-stretch: 85%
 .halt .hwert { text-align: right; color: var(--tinte-2); }
 .halt.max .name, .halt.max .hwert { font-weight: 750; color: var(--tinte); }
 .halt.ausfall .name { text-decoration: line-through; color: var(--tinte-3); }
+.halt.unsicher .hwert { color: var(--tinte-3); }
 .halt .spur { height: 6px; border-radius: 0 3px 3px 0; }
 .halt .fuell { border-radius: 0 3px 3px 0; }
 .fakten { margin: 0; color: var(--tinte-2); font-size: .9375rem; max-width: 70ch; }
@@ -306,8 +307,9 @@ h3 { margin: 0 0 10px; font-size: 1.1875rem; font-weight: 720; font-stretch: 85%
     <div class="methode-spalten">
       <div>
         <h2>So wird gezählt</h2>
-        <p>Eine Fahrt kommt in die Rangliste, wenn sie an mindestens einem Schweizer Halt 60 Minuten oder mehr zu spät ankam oder abfuhr. Massgebend ist die grösste Verspätung entlang der Strecke.</p>
-        <p>Gezählt werden gemessene und geschätzte Ist-Zeiten. Reine Prognosen, Durchfahrten ohne Halt, Halte im Ausland und offensichtliche Datenfehler (mehr als 12 Stunden Abweichung) bleiben draussen. Als ausgefallen gilt eine Fahrt, die an allen Schweizer Halten als ausgefallen gemeldet ist.</p>
+        <p>Eine Zugfahrt kommt in die Rangliste, wenn sie an mindestens einem Schweizer Halt 60 Minuten oder mehr zu spät ankam oder abfuhr. Massgebend ist die grösste Verspätung entlang der Strecke.</p>
+        <p>Gezählt werden gemessene und geschätzte Ist-Zeiten. Eine Verspätung zählt nur, wenn ein benachbarter Halt sie bestätigt (höchstens 40 Minuten Unterschied). So fallen Messfehler an einem einzelnen Halt weg. Reine Prognosen, Durchfahrten ohne Halt, Halte im Ausland und Abweichungen über 12 Stunden bleiben draussen.</p>
+        <p>Busse und Trams sind nicht dabei: Bei ihnen entstehen Werte von über einer Stunde fast immer durch falsch zugeordnete Fahrten. Als ausgefallen gilt ein Zug, der an allen Schweizer Halten als ausgefallen gemeldet ist.</p>
       </div>
       <div>
         <h2>Quelle</h2>
@@ -326,7 +328,7 @@ const $ = (s, root = document) => root.querySelector(s);
 const PRIME = "′";
 const SCHWELLEN = [[60, "ab 60′"], [90, "ab 90′"], [120, "ab 2 Std."], [180, "ab 3 Std."]];
 const TAGE_KURZ = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
-const S = { index: null, cache: new Map(), tag: null, produkt: "Alle", schwelle: 60, sichtbar: 20 };
+const S = { index: null, cache: new Map(), tag: null, bereich: "Alle", schwelle: 60, sichtbar: 20 };
 
 /* ---------- Helfer ---------- */
 function el(tag, attrs = {}, ...kinder) {
@@ -487,7 +489,7 @@ function schritt(richtung) {
 
 /* ---------- Zeichnen ---------- */
 function gefiltert() {
-  return S.tag.liste.filter((t) => (S.produkt === "Alle" || t.produkt === S.produkt) && t.max >= S.schwelle);
+  return S.tag.liste.filter((t) => (S.bereich === "Alle" || (S.bereich === "International") === Boolean(t.int)) && t.max >= S.schwelle);
 }
 
 function zeichne() {
@@ -508,10 +510,10 @@ function zeichne() {
       el("ol", { class: "liste", id: "liste" }),
       el("p", { class: "mehr" }, el("button", { type: "button", class: "knopf", id: "mehr", onclick: () => { S.sichtbar += 20; zeichneListe(); } }))),
     el("section", { class: "abschnitt drei", "aria-label": "Wann, wo und wer" },
-      el("div", {}, el("h2", { text: "Wann" }), el("p", { class: "unter", text: "Uhrzeit, zu der die Fahrten am stärksten verspätet waren" }),
+      el("div", {}, el("h2", { text: "Wann" }), el("p", { class: "unter", text: "Uhrzeit, zu der die Züge am stärksten verspätet waren" }),
         el("div", { class: "grafik", id: "wann" }), el("details", { class: "tabelle", id: "wann-tabelle" })),
       el("div", {}, el("h2", { text: "Wo" }), el("p", { class: "unter", id: "wo-unter" }), el("ol", { class: "balkenliste", id: "wo" })),
-      el("div", {}, el("h2", { text: "Wer" }), el("p", { class: "unter", text: "Betreiber mit den meisten Fahrten in der Liste" }), el("ol", { class: "balkenliste", id: "wer" }))),
+      el("div", {}, el("h2", { text: "Wer" }), el("p", { class: "unter", text: "Betreiber mit den meisten Zügen in der Liste" }), el("ol", { class: "balkenliste", id: "wer" }))),
     zeichneMonatAbschnitt());
   zeichneListe();
   zeichneMonat();
@@ -549,7 +551,7 @@ function zeichneTag() {
     held.append(
       el("p", { class: "held-kicker", text: t.titel }),
       el("p", { class: "held-zahl" }, "0"),
-      el("p", { class: "held-linie", text: "Fahrten mit mehr als einer Stunde Verspätung" }),
+      el("p", { class: "held-linie", text: "Zugfahrten mit mehr als einer Stunde Verspätung" }),
       el("p", { class: "held-meta", text: k.max ? `Die grösste Verspätung des Tages betrug ${dauer(k.max)}.` : "" }));
   }
 
@@ -561,10 +563,10 @@ function zeichneTag() {
   }
   const feld = (titel, wert, dazu) => el("div", {}, el("dt", { text: titel }), el("dd", { class: "zahl" }, wert, dazu ? el("span", { class: "dazu", text: dazu }) : null));
   const zahlen = el("dl", { class: "zahlen" },
-    feld(`Fahrten ab 60${PRIME}`, zahl(k.ab60), vergleich),
+    feld(`Zugfahrten ab 60${PRIME}`, zahl(k.ab60), vergleich),
     feld("Davon ab 2 Stunden", zahl(k.ab120), null),
-    feld("Ganz ausgefallen", zahl(k.ausfaelle), k.teilausfaelle ? `dazu ${zahl(k.teilausfaelle)} teilweise` : null),
-    feld("Anteil", k.ab60 ? `1 von ${zahl(k.fahrten_gemessen / k.ab60)}` : "–", "aller gemessenen Fahrten"));
+    feld("Ausgefallene Züge", zahl(k.ausfaelle), k.teilausfaelle ? `dazu ${zahl(k.teilausfaelle)} teilweise` : null),
+    feld("Anteil", k.ab60 ? `1 von ${zahl(k.fahrten_gemessen / k.ab60)}` : "–", "aller gemessenen Zugfahrten"));
 
   const text = t.text.startsWith(`${t.titel}: `) ? t.text.slice(t.titel.length + 2) : t.text;
   return el("section", { "aria-label": "Zusammenfassung des Tages" }, held,
@@ -572,11 +574,9 @@ function zeichneTag() {
 }
 
 function zeichneFilter() {
-  const produkte = new Map();
-  for (const f of S.tag.liste) produkte.set(f.produkt, (produkte.get(f.produkt) || 0) + 1);
-  const ordnung = ["Zug", "Bus", "Tram"];
-  const namen = ["Alle", ...[...produkte.keys()].sort((a, b) => ((ordnung.indexOf(a) + 1) || 9) - ((ordnung.indexOf(b) + 1) || 9))];
-  if (!namen.includes(S.produkt)) S.produkt = "Alle";
+  const international = S.tag.liste.filter((f) => f.int).length;
+  const bereiche = [["Alle", "Alle", S.tag.liste.length], ["Inland", "Inland", S.tag.liste.length - international],
+    ["International", "International", international]];
   const gruppe = (id, label, optionen, aktiv, setze) => {
     const g = el("div", { class: "segment", role: "radiogroup", "aria-label": label });
     optionen.forEach(([wert, text, anz], i) => {
@@ -589,17 +589,17 @@ function zeichneFilter() {
     return g;
   };
   return el("div", { class: "filter" },
-    gruppe("produkt", "Verkehrsmittel", namen.map((n) => [n, n, n === "Alle" ? S.tag.liste.length : produkte.get(n)]), S.produkt, (w) => { S.produkt = w; }),
+    gruppe("bereich", "Strecke", bereiche, S.bereich, (w) => { S.bereich = w; }),
     gruppe("schwelle", "Mindestverspätung", SCHWELLEN.map(([w, t]) => [w, t, null]), S.schwelle, (w) => { S.schwelle = w; }));
 }
 
 function zeichneListe() {
   const liste = gefiltert(), max = skala(), ziel = $("#liste");
   const total = S.tag.kennzahlen.ab60;
-  $("#rl-info").textContent = `${zahl(liste.length)} ${liste.length === 1 ? "Fahrt" : "Fahrten"}, sortiert nach der grössten Verspätung`
+  $("#rl-info").textContent = `${zahl(liste.length)} ${liste.length === 1 ? "Zugfahrt" : "Zugfahrten"}, sortiert nach der grössten Verspätung`
     + (total > S.tag.liste.length ? `. Gespeichert sind die ${zahl(S.tag.liste.length)} grössten von ${zahl(total)}.` : ".");
   ziel.replaceChildren();
-  if (!liste.length) ziel.append(el("li", { class: "leer", text: "Keine Fahrt erfüllt diesen Filter. Wähle eine tiefere Schwelle oder ein anderes Verkehrsmittel." }));
+  if (!liste.length) ziel.append(el("li", { class: "leer", text: "Keine Zugfahrt erfüllt diesen Filter. Wähle eine tiefere Schwelle oder «Alle»." }));
   for (const f of liste.slice(0, S.sichtbar)) ziel.append(fahrtZeile(f, max));
   const rest = liste.length - S.sichtbar, knopf = $("#mehr");
   knopf.hidden = rest <= 0;
@@ -636,15 +636,18 @@ function fahrtDetail(f, max) {
   for (const [name, zeit, v, flag] of f.halte) {
     const istMax = !maxGezeigt && v === f.max && name === f.wo;
     if (istMax) maxGezeigt = true;
-    halte.append(el("li", { class: `halt${istMax ? " max" : ""}${flag === "A" ? " ausfall" : ""}` },
+    const unsicher = flag === "U";
+    halte.append(el("li", { class: `halt${istMax ? " max" : ""}${flag === "A" ? " ausfall" : ""}${unsicher ? " unsicher" : ""}` },
       el("span", { class: "zeit", text: zeit || "" }),
       el("span", { class: "name", text: name }),
-      v != null && v > 0 ? spur(v, max) : el("span", { class: "spur", "aria-hidden": "true" }),
-      el("span", { class: "hwert", text: flag === "A" ? "fällt aus" : v == null ? "keine Messung" : v > 0 ? vsp(v) : "pünktlich" })));
+      v != null && v > 0 && !unsicher ? spur(v, max) : el("span", { class: "spur", "aria-hidden": "true" }),
+      el("span", { class: "hwert", text: flag === "A" ? "fällt aus" : v == null ? "keine Messung"
+        : unsicher ? `${vsp(v)} ?` : v > 0 ? vsp(v) : "pünktlich" })));
   }
   const fakten = [];
   if (f.ende != null) fakten.push(`Ankunft am letzten Schweizer Halt ${f.ende > 0 ? vsp(f.ende) : "pünktlich"}.`);
   if (f.n60 > 1) fakten.push(`An ${f.n60} Halten über 60${PRIME}.`);
+  if (f.halte.some((h) => h[3] === "U")) fakten.push("Werte mit «?» bestätigt kein Nachbarhalt, sie zählen nicht.");
   if (f.int) fakten.push("Die Fahrt beginnt oder endet im Ausland; gezählt werden nur Schweizer Halte.");
   if (f.nr) fakten.push(`Zug ${f.nr}, Betreiber ${f.betreiber_name}.`);
   else fakten.push(`Betreiber ${f.betreiber_name}.`);
@@ -672,8 +675,8 @@ function zeichneWann(liste = gefiltert()) {
       svg.append(sv("path", { d: `M${x},${H - unten} V${yy + r} q0,-${r} ${r},-${r} h${sb - 2 * r} q${r},0 ${r},${r} V${H - unten} Z`, fill: "var(--signal)" }));
     }
     const ziel = sv("rect", { x: links + h * breite, y: oben, width: breite, height: H - oben - unten, fill: "transparent", tabindex: 0,
-      "aria-label": `${h} bis ${h + 1} Uhr: ${v} Fahrten` });
-    tipFuer(ziel, [[`${v} ${v === 1 ? "Fahrt" : "Fahrten"}`, `${h}–${h + 1} Uhr`]]);
+      "aria-label": `${h} bis ${h + 1} Uhr: ${v} Zugfahrten` });
+    tipFuer(ziel, [[`${v} ${v === 1 ? "Zugfahrt" : "Zugfahrten"}`, `${h}–${h + 1} Uhr`]]);
     svg.append(ziel);
     if (h % 6 === 0) svg.append(sv("text", { x: links + h * breite + breite / 2, y: H - 6, "text-anchor": "middle" }, document.createTextNode(h === 0 ? "0 Uhr" : String(h))));
   });
@@ -697,7 +700,7 @@ function zeichneWo(liste) {
   }
   const top = [...zaehler.entries()]
     .sort((a, b) => b[1] - a[1] || spitze.get(b[0]) - spitze.get(a[0]) || a[0].localeCompare(b[0], "de")).slice(0, 8);
-  $("#wo-unter").textContent = `Halte, an denen am meisten Fahrten ${S.schwelle >= 120 ? `über ${S.schwelle / 60} Stunden` : `über ${S.schwelle}${PRIME}`} zu spät waren`;
+  $("#wo-unter").textContent = `Halte, an denen am meisten Züge ${S.schwelle >= 120 ? `über ${S.schwelle / 60} Stunden` : `über ${S.schwelle}${PRIME}`} zu spät waren`;
   balkenListe($("#wo"), top.map(([n, a]) => ({ name: n, wert: a })), (x) => zahl(x.wert));
 }
 function zeichneWer(liste) {
@@ -721,12 +724,12 @@ function balkenListe(ziel, eintraege, wertText) {
 function zeichneMonatAbschnitt() {
   return el("section", { class: "abschnitt", "aria-labelledby": "m-titel" },
     el("h2", { id: "m-titel", text: "Die letzten 30 Tage" }),
-    el("p", { class: "unter", text: `Fahrten ab 60${PRIME} pro Tag, alle Verkehrsmittel. Tippe auf einen Tag, um ihn zu öffnen.` }),
+    el("p", { class: "unter", text: `Zugfahrten ab 60${PRIME} pro Tag. Tippe auf einen Tag, um ihn zu öffnen.` }),
     el("div", { class: "grafik", id: "monat" }),
     el("details", { class: "tabelle", id: "monat-tabelle" }),
     el("div", { class: "zwei" },
       el("div", {}, el("h3", { text: "Wiederholungstäter" }), el("p", { class: "unter", text: "Linien, die am häufigsten in der Liste standen" }), el("ol", { class: "balkenliste", id: "linien30" })),
-      el("div", {}, el("h3", { text: "Brennpunkte" }), el("p", { class: "unter", text: `Halte mit den meisten Fahrten über 60${PRIME}` }), el("ol", { class: "balkenliste", id: "halte30" }))));
+      el("div", {}, el("h3", { text: "Brennpunkte" }), el("p", { class: "unter", text: `Halte mit den meisten Zügen über 60${PRIME}` }), el("ol", { class: "balkenliste", id: "halte30" }))));
 }
 function zeichneMonat() {
   const box = $("#monat");
@@ -737,7 +740,7 @@ function zeichneMonat() {
   const ymax = hoechst <= 4 ? 4 : hoechst <= 10 ? 10 : Math.ceil(hoechst / 10) * 10;
   const breite = (B - links) / Math.max(tage.length, 7), sb = Math.max(4, Math.min(24, breite - 4));
   const y = (v) => oben + (H - oben - unten) * (1 - v / ymax);
-  const svg = sv("svg", { viewBox: `0 0 ${B} ${H}`, height: H, role: "img", "aria-label": "Fahrten ab 60 Minuten Verspätung pro Tag" });
+  const svg = sv("svg", { viewBox: `0 0 ${B} ${H}`, height: H, role: "img", "aria-label": "Zugfahrten ab 60 Minuten Verspätung pro Tag" });
   for (const g of [0, ymax / 2, ymax]) {
     svg.append(sv("line", { x1: links, x2: B, y1: y(g), y2: y(g), stroke: "var(--linie)", "stroke-width": 1 }));
     svg.append(sv("text", { x: links - 6, y: y(g) + 4, "text-anchor": "end" }, document.createTextNode(zahl(g))));
@@ -755,10 +758,10 @@ function zeichneMonat() {
       svg.append(sv("text", { x: x + sb / 2, y: y(t.ab60) - 6, "text-anchor": "middle", "font-weight": aktiv ? 700 : 400, fill: aktiv ? "var(--tinte)" : "var(--tinte-2)" },
         document.createTextNode(zahl(t.ab60))));
     }
-    const zeilen = [[`${zahl(t.ab60)} ${t.ab60 === 1 ? "Fahrt" : "Fahrten"} ab 60${PRIME}`, kurzDatum(t.datum) + t.datum.slice(0, 4)]];
+    const zeilen = [[`${zahl(t.ab60)} ${t.ab60 === 1 ? "Zugfahrt" : "Zugfahrten"} ab 60${PRIME}`, kurzDatum(t.datum) + t.datum.slice(0, 4)]];
     if (t.top) zeilen.push([`${t.top.linie} ${vsp(t.top.max)}`, `${t.top.von} – ${t.top.nach}`]);
     const ziel = sv("rect", { x: links + i * breite, y: 0, width: breite, height: H - unten, fill: "transparent", tabindex: 0, role: "button",
-      style: "cursor:pointer", "aria-label": `${kurzDatum(t.datum)}: ${t.ab60} Fahrten ab 60 Minuten. Tag öffnen.` });
+      style: "cursor:pointer", "aria-label": `${kurzDatum(t.datum)}: ${t.ab60} Zugfahrten ab 60 Minuten. Tag öffnen.` });
     tipFuer(ziel, zeilen, () => { versteckeTip(); oeffne(t.datum); });
     svg.append(ziel);
     const tagLabel = (tage.length - 1 - i) % 7 === 0;

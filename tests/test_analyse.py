@@ -40,12 +40,14 @@ def pruefe_tag(datum: str) -> tuple[dict, dict]:
     k = tag["kennzahlen"]
     assert k["ab60"] == len(erwartet)
     assert k["unplausibel"] >= 1, "Datenfehler (+24 Std.) wurde nicht ausgefiltert"
+    assert k["ausreisser"] >= 1, "Ausreisser an der Endstation wurde nicht erkannt"
+    assert all(t["produkt"] == "Zug" for t in tag["liste"]), "Busse/Trams in der Liste"
     werte = [t["max"] for t in tag["liste"]]
     assert werte == sorted(werte, reverse=True), "Liste nicht absteigend sortiert"
     for t in tag["liste"]:
         assert all(h[0] not in beispieldaten.AUSLAND for h in t["halte"]), "Auslandhalt im Verlauf"
         assert all(h[0] != "Rothrist" for h in t["halte"]), "Durchfahrt im Verlauf"
-        assert t["max"] == max(h[2] for h in t["halte"] if h[2] is not None)
+        assert t["max"] == max(h[2] for h in t["halte"] if h[2] is not None and h[3] == "")
         if t["linie"] == "EC":
             assert t["int"] and {t["von"], t["nach"]} & set(beispieldaten.AUSLAND)
     assert tag["basis"] == "gemessen"

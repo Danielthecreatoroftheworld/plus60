@@ -85,6 +85,7 @@ LINIEN = [
 ]
 
 GEMESSEN = ("REAL", "GESCHAETZT")
+TOLERANZ = 40 * 60  # Sekunden, wie in der Analyse
 
 
 def code(name: str) -> str:
@@ -162,8 +163,12 @@ def erzeuge(datum: dt.date, ziel: Path, faktor: float | None = None) -> dict:
                     vsp = [30.0] * n
                     unplausibel_idx = n // 2
                     komplett, teil_ab = False, n
+                # Ausreisser an der Endstation (+150 Min., sonst pünktlich) – darf nicht zählen
+                if linie["l"] == "IC5" and richtung == 0 and k == 4:
+                    vsp = [60.0] * (n - 1) + [150 * 60.0]
+                    komplett, teil_ab = False, n
 
-                beste = None
+                messung = []  # (Name, Schweiz?, Wert in Sekunden oder None) in Fahrtreihenfolge
                 for i, (name, m) in enumerate(halte):
                     soll_an = abfahrt + dt.timedelta(minutes=m)
                     verweil = 1 if (linie["p"] == "Zug" and 0 < i < n - 1) else 0
@@ -200,12 +205,13 @@ def erzeuge(datum: dt.date, ziel: Path, faktor: float | None = None) -> dict:
                         "" if letzter else (status if not ausfall else "PROGNOSE"),
                         "false", "" if ausland else f"ch:1:sloid:{code(name)[2:]}",
                     ])
-                    # Erwartung: nur Schweizer Halte, gemessene Zeiten, plausibel
-                    if not ausland and not ausfall and status in GEMESSEN:
-                        werte = ([] if erster else [v_an]) + ([] if letzter else [v_ab])
-                        for w in werte:
-                            if abs(w) <= 720 * 60 and (beste is None or w > beste[0]):
-                                beste = (w, name)
+                    # Messwert pro Halt: grösster gemessener Wert, Datenfehler (> 12 Std.) fallen weg
+                    w = None
+                    if not ausfall and status in GEMESSEN:
+                        w = max(([] if erster else [v_an]) + ([] if letzter else [v_ab]))
+                        if abs(w) > 720 * 60:
+                            w = None
+                    messung.append((name, not ausland, w))
 
                     # eine Durchfahrt mit riesigem Wert – darf nicht zählen
                     if linie["l"] == "IC1" and richtung == 0 and i == 5 and k == 3 and not spezial["durchfahrt"]:
@@ -216,7 +222,17 @@ def erzeuge(datum: dt.date, ziel: Path, faktor: float | None = None) -> dict:
                                        zeit(t, False), zeit(t + dt.timedelta(minutes=200), True), "REAL",
                                        zeit(t, False), zeit(t + dt.timedelta(minutes=200), True), "REAL",
                                        "true", "ch:1:sloid:999"])
-                if beste and beste[0] >= 3600:
+                # Erwartung: nur Züge; ein Wert zählt, wenn ein Nachbarhalt ihn bestätigt (± 40 Min.)
+                beste = None
+                for i, (name, schweiz, w) in enumerate(messung):
+                    if w is None or not schweiz:
+                        continue
+                    vor = next((x for _, _, x in reversed(messung[:i]) if x is not None), None)
+                    nach = next((x for _, _, x in messung[i + 1:] if x is not None), None)
+                    nachbarn = [x for x in (vor, nach) if x is not None]
+                    if nachbarn and w <= max(nachbarn) + TOLERANZ and (beste is None or w > beste[0]):
+                        beste = (w, name)
+                if linie["p"] == "Zug" and beste and beste[0] >= 3600:
                     erwartet[fahrt] = {"max": int(beste[0] / 60), "wo": beste[1]}
                 abfahrt += dt.timedelta(minutes=linie["takt"])
 

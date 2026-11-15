@@ -50,7 +50,9 @@ SCHWELLE = 60                 # Minuten – ab hier kommt eine Fahrt in die List
 STUFEN = (60, 90, 120, 180)   # für die Kennzahlen
 MAX_PLAUSIBEL = 12 * 60       # mehr als 12 Std. Abweichung = Datenfehler
 MAX_LISTE = 300               # so viele Fahrten pro Tag kommen mit Verlauf ins JSON
-ERSTLAUF_TAGE = 14            # beim allerersten Lauf so weit zurück
+TOLERANZ = 40                 # Minuten: so weit darf ein Halt von seinem Nachbarhalt abweichen
+VERKEHRSMITTEL = ("zug",)     # Busse/Trams: Stundenwerte sind dort fast immer Zuordnungsfehler
+ERSTLAUF_TAGE = 30            # beim allerersten Lauf so weit zurück
 STANDARD_TAGE = 7             # danach: Lücken der letzten 7 Tage nachholen
 
 # Status der Ist-Zeiten (Datei liefert deutsche Werte, Doku nennt englische)
@@ -244,7 +246,7 @@ def trennzeichen(pfad: Path) -> str:
 # ---------------------------------------------------------------- Analyse
 
 def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = None,
-               mit_prognose: bool = False) -> dict:
+               mit_prognose: bool = False, alle_verkehrsmittel: bool = False) -> dict:
     t0 = time.time()
     con = duckdb.connect()
     con.execute("SET enable_progress_bar = false")
@@ -262,6 +264,8 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
     def C(name: str) -> str:
         return '"' + norm[name].replace('"', '""') + '"' if name in norm else "NULL::VARCHAR"
 
+    filter_vm = "" if alle_verkehrsmittel else (
+        f"AND lower(trim(coalesce({C('PRODUKT_ID')}, ''))) IN ({', '.join(repr(v) for v in VERKEHRSMITTEL)})")
     con.execute(f"""
         CREATE TEMP TABLE ev AS
         SELECT
@@ -284,7 +288,7 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
           try_strptime(trim({C('AB_PROGNOSE')}), {ZEITFORMATE})      AS ab_ist,
           upper(trim(coalesce({C('AB_PROGNOSE_STATUS')}, '')))       AS ab_status
         FROM {quelle_sql}
-        WHERE nullif(trim({C('FAHRT_BEZEICHNER')}), '') IS NOT NULL""")
+        WHERE nullif(trim({C('FAHRT_BEZEICHNER')}), '') IS NOT NULL {filter_vm}""")
     zeilen = con.execute("SELECT count(*) FROM ev").fetchone()[0]
     if zeilen == 0:
         raise RuntimeError("Die Datei enthält keine lesbaren Zeilen.")
@@ -315,31 +319,45 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
                THEN date_diff('second', ab_soll, ab_ist) / 60.0 END AS ab_vsp
         FROM ev""")
 
-    # Ein Eintrag pro Schweizer Halt (Durchfahrten und Auslandhalte zählen nicht)
+    # Ein Eintrag pro Halt (ohne Durchfahrten), Werte über 12 Std. gelten als Datenfehler
     con.execute(f"""
-        CREATE TEMP TABLE halte AS
+        CREATE TEMP TABLE alle_halte AS
         SELECT fahrt, halt, t_soll,
+               bool_or(ch) AS ch,
                any_value(an_soll) AS an_soll,
                bool_or(ausfall) AS ausfall,
                max(CASE WHEN abs(an_vsp) <= {MAX_PLAUSIBEL} THEN an_vsp END) AS an_vsp,
                max(CASE WHEN abs(greatest(an_vsp, ab_vsp)) <= {MAX_PLAUSIBEL}
                         THEN greatest(an_vsp, ab_vsp) END) AS vsp,
-               bool_or(abs(greatest(an_vsp, ab_vsp)) > {MAX_PLAUSIBEL}) AS unplausibel
-        FROM ev2 WHERE ch AND NOT durchfahrt
+               coalesce(bool_or(abs(greatest(an_vsp, ab_vsp)) > {MAX_PLAUSIBEL}), false) AS unplausibel
+        FROM ev2 WHERE NOT durchfahrt AND t_soll IS NOT NULL
         GROUP BY fahrt, halt, t_soll""")
+
+    # Ein Wert zählt nur, wenn ein Nachbarhalt (davor oder danach, auch im Ausland)
+    # eine ähnliche Verspätung zeigt. So fallen Ausreisser an einem einzelnen Halt weg.
+    # Gezählt werden danach nur Schweizer Halte.
+    con.execute(f"""
+        CREATE TEMP TABLE halte AS
+        SELECT fahrt, halt, t_soll, an_soll, ausfall, unplausibel, vsp AS vsp_roh,
+               CASE WHEN vsp <= greatest(vor, nach) + {TOLERANZ} THEN vsp END AS vsp,
+               CASE WHEN vsp <= greatest(vor, nach) + {TOLERANZ} THEN an_vsp END AS an_vsp
+        FROM (SELECT *, lag(vsp IGNORE NULLS) OVER w AS vor, lead(vsp IGNORE NULLS) OVER w AS nach
+              FROM alle_halte WINDOW w AS (PARTITION BY fahrt ORDER BY t_soll, halt))
+        WHERE ch""")
 
     con.execute(f"""
         CREATE TEMP TABLE fahrten AS
         SELECT fahrt,
                count(*)                                   AS halte,
                count(*) FILTER (WHERE ausfall)            AS halte_ausfall,
-               count(vsp)                                 AS messpunkte,
+               count(vsp_roh)                             AS messpunkte,
                max(vsp)                                   AS max_vsp,
+               max(vsp_roh)                               AS max_roh,
                arg_max(halt, vsp)                         AS max_halt,
                arg_max(t_soll, vsp)                       AS max_zeit,
                arg_max(an_vsp, an_soll)                   AS end_vsp,
                count(*) FILTER (WHERE vsp >= {SCHWELLE})  AS n_ueber,
-               coalesce(bool_or(unplausibel), false)      AS unplausibel
+               bool_or(unplausibel)                       AS unplausibel
         FROM halte GROUP BY fahrt""")
 
     con.execute("""
@@ -376,14 +394,15 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
                max(max_vsp),
                count(*) FILTER (WHERE komplett_ausfall),
                count(*) FILTER (WHERE teilausfall),
-               count(*) FILTER (WHERE unplausibel)
+               count(*) FILTER (WHERE unplausibel),
+               count(*) FILTER (WHERE max_roh >= {SCHWELLE} AND coalesce(max_vsp, 0) < {SCHWELLE})
         FROM f""").fetchone()
     kennzahlen = {
         "fahrten": k[0], "fahrten_gemessen": k[1],
         **{f"ab{s}": k[2 + i] for i, s in enumerate(STUFEN)},
         "max": minuten(k[2 + len(STUFEN)]) or 0,
         "ausfaelle": k[3 + len(STUFEN)], "teilausfaelle": k[4 + len(STUFEN)],
-        "unplausibel": k[5 + len(STUFEN)],
+        "unplausibel": k[5 + len(STUFEN)], "ausreisser": k[6 + len(STUFEN)],
     }
 
     produkte = [{"produkt": p, "fahrten": n, "gemessen": g, "ab60": a} for p, n, g, a in con.execute(f"""
@@ -411,11 +430,16 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
         SELECT * FROM f WHERE max_vsp >= {SCHWELLE}
         ORDER BY max_vsp DESC, fahrt LIMIT {MAX_LISTE}""")
     verlauf = defaultdict(list)
-    for fahrt, halt, t, vsp, ausfall in con.execute("""
-            SELECT fahrt, halt, t_soll, vsp, ausfall FROM halte
+    for fahrt, halt, t, vsp, roh, ausfall in con.execute("""
+            SELECT fahrt, halt, t_soll, vsp, vsp_roh, ausfall FROM halte
             WHERE fahrt IN (SELECT fahrt FROM top) AND t_soll IS NOT NULL
-            ORDER BY fahrt, t_soll""").fetchall():
-        verlauf[fahrt].append([halt, hhmm(t), minuten(vsp), "A" if ausfall else ""])
+            ORDER BY fahrt, t_soll, halt""").fetchall():
+        if ausfall:
+            verlauf[fahrt].append([halt, hhmm(t), None, "A"])
+        elif vsp is None and roh is not None and roh >= 30:  # Ausreisser: zeigen, aber nicht zählen
+            verlauf[fahrt].append([halt, hhmm(t), minuten(roh), "U"])
+        else:
+            verlauf[fahrt].append([halt, hhmm(t), minuten(vsp if vsp is not None else roh), ""])
 
     liste = []
     spalten_top = [d[0] for d in con.execute("SELECT * FROM top LIMIT 0").description]
@@ -463,7 +487,7 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
 def zusammenfassung(tag: dict, vortag: dict | None) -> str:
     k, n = tag["kennzahlen"], tag["kennzahlen"]["ab60"]
     if n == 0:
-        return f"{tag['titel']}: Keine einzige Fahrt war eine Stunde oder länger verspätet."
+        return f"{tag['titel']}: Keine einzige Zugfahrt war eine Stunde oder länger verspätet."
     saetze = []
     vergleich = ""
     if vortag:
@@ -474,7 +498,7 @@ def zusammenfassung(tag: dict, vortag: dict | None) -> str:
             vergleich = f" – {zahl(-diff)} weniger als am Vortag"
         else:
             vergleich = " – gleich viele wie am Vortag"
-    saetze.append(f"{tag['titel']}: {zahl(n)} {'Fahrt war' if n == 1 else 'Fahrten waren'} "
+    saetze.append(f"{tag['titel']}: {zahl(n)} {'Zugfahrt war' if n == 1 else 'Zugfahrten waren'} "
                   f"mindestens eine Stunde verspätet{vergleich}.")
     t = tag["liste"][0]
     route = f" von {t['von']} nach {t['nach']}" if t["von"] and t["nach"] and t["von"] != t["nach"] else ""
@@ -486,9 +510,9 @@ def zusammenfassung(tag: dict, vortag: dict | None) -> str:
                       f"{'Fahrt' if b['ab60'] == 1 else 'Fahrten'}.")
     if tag["hotspots"] and tag["hotspots"][0]["fahrten"] >= 2:
         h = tag["hotspots"][0]
-        saetze.append(f"Brennpunkt war {h['halt']}: Dort waren {h['fahrten']} Fahrten über eine Stunde zu spät.")
+        saetze.append(f"Brennpunkt war {h['halt']}: Dort waren {h['fahrten']} Züge über eine Stunde zu spät.")
     if k["fahrten_gemessen"]:
-        saetze.append(f"Das ist etwa eine von {zahl(round(k['fahrten_gemessen'] / n))} Fahrten.")
+        saetze.append(f"Das ist etwa eine von {zahl(round(k['fahrten_gemessen'] / n))} Zugfahrten.")
     return " ".join(saetze)
 
 
@@ -563,7 +587,8 @@ def vortag_laden(ausgabe: Path, datum: dt.date) -> dict | None:
     return lies(f) if f.exists() else None
 
 
-def tag_verarbeiten(datum: dt.date, ausgabe: Path, mit_prognose: bool, csv: Path | None = None) -> dict | None:
+def tag_verarbeiten(datum: dt.date, ausgabe: Path, mit_prognose: bool, csv: Path | None = None,
+                    alle_verkehrsmittel: bool = False) -> dict | None:
     log(f"\n{datum.isoformat()} · {datum_lang(datum)}")
     with tempfile.TemporaryDirectory(prefix="plus60-") as tmp:
         if csv:
@@ -577,7 +602,7 @@ def tag_verarbeiten(datum: dt.date, ausgabe: Path, mit_prognose: bool, csv: Path
             pfad = Path(tmp) / "istdaten.csv"
             herunterladen(quelle["url"], pfad)
             pfad = entpacken(pfad)
-        tag = analysiere(pfad, datum, quelle, vortag_laden(ausgabe, datum), mit_prognose)
+        tag = analysiere(pfad, datum, quelle, vortag_laden(ausgabe, datum), mit_prognose, alle_verkehrsmittel)
     schreibe(ausgabe / "tage" / f"{datum.isoformat()}.json", tag)
     k = tag["kennzahlen"]
     log(f"  ✓ {k['ab60']} Fahrten ≥ {SCHWELLE} Min. (max. {k['max']} Min.) · {tag['dauer_s']} s")
@@ -609,6 +634,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--csv", help="lokale Ist-Daten-Datei statt Download (zusammen mit --datum)")
     ap.add_argument("--ausgabe", default=str(STANDARD_AUSGABE), help="Zielordner für die JSON-Dateien")
     ap.add_argument("--mit-prognose", action="store_true", help="auch reine Prognosewerte mitzählen")
+    ap.add_argument("--alle-verkehrsmittel", action="store_true", help="auch Busse, Trams usw. auswerten")
     ap.add_argument("--neu", action="store_true", help="schon berechnete Tage neu rechnen")
     ap.add_argument("--demo", action="store_true", help="Ausgabe als Beispieldaten markieren")
     args = ap.parse_args(argv)
@@ -621,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.datum:
             ap.error("--csv braucht --datum")
         datum = dt.date.fromisoformat(args.datum)
-        neue.append(tag_verarbeiten(datum, ausgabe, args.mit_prognose, Path(args.csv)))
+        neue.append(tag_verarbeiten(datum, ausgabe, args.mit_prognose, Path(args.csv), args.alle_verkehrsmittel))
     else:
         if args.datum:
             daten, ueberschreiben = [dt.date.fromisoformat(args.datum)], True
@@ -635,7 +661,7 @@ def main(argv: list[str] | None = None) -> int:
             if (ausgabe / "tage" / f"{datum.isoformat()}.json").exists() and not ueberschreiben:
                 continue
             try:
-                tag = tag_verarbeiten(datum, ausgabe, args.mit_prognose)
+                tag = tag_verarbeiten(datum, ausgabe, args.mit_prognose, alle_verkehrsmittel=args.alle_verkehrsmittel)
                 if tag:
                     neue.append(tag)
             except Exception as e:  # noqa: BLE001 – ein kaputter Tag soll die anderen nicht stoppen

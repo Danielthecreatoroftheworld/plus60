@@ -18,6 +18,10 @@ on:
         description: "Wie viele Tage rückwirkend nachholen? (leer = automatisch)"
         required: false
         default: ""
+      neu:
+        description: "Schon berechnete Tage neu rechnen (nach Änderungen an der Methode)"
+        type: boolean
+        default: false
 
 concurrency:
   group: plus60
@@ -45,7 +49,7 @@ jobs:
         run: pip install -r pipeline/requirements.txt
 
       - name: Ist-Daten holen und auswerten
-        run: python pipeline/analyse.py ${{ inputs.tage && format('--tage {0}', inputs.tage) || '' }}
+        run: python pipeline/analyse.py ${{ inputs.tage && format('--tage {0}', inputs.tage) || '' }} ${{ inputs.neu && '--neu' || '' }}
 
       - name: Ergebnisse speichern
         if: ${{ !cancelled() }}
