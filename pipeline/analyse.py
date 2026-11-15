@@ -352,6 +352,7 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
                count(*) FILTER (WHERE ausfall)            AS halte_ausfall,
                count(vsp_roh)                             AS messpunkte,
                max(vsp)                                   AS max_vsp,
+               min(vsp)                                   AS min_vsp,
                max(vsp_roh)                               AS max_roh,
                arg_max(halt, vsp)                         AS max_halt,
                arg_max(t_soll, vsp)                       AS max_zeit,
@@ -377,9 +378,15 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
                bool_or(NOT ch) AS international
         FROM ev2 WHERE NOT durchfahrt AND t_soll IS NOT NULL GROUP BY fahrt""")
 
-    con.execute("""
+    # Nacht der Zeitumstellung: Fahrten, die durchgehend rund eine Stunde abweichen,
+    # zeigen die verstellte Uhr, keine Verspätung.
+    umstellung = "TRUE" if zeitumstellung(datum) else "FALSE"
+    con.execute(f"""
         CREATE TEMP TABLE f AS
-        SELECT f.*, a.betreiber, a.betreiber_name, a.linie, a.vm, a.linien_id, a.zusatz,
+        SELECT f.* REPLACE (CASE WHEN {umstellung} AND f.min_vsp >= 55 AND f.max_vsp <= 65
+                                 THEN NULL ELSE f.max_vsp END AS max_vsp),
+               ({umstellung} AND f.min_vsp >= 55 AND f.max_vsp <= 65) AS uhr,
+               a.betreiber, a.betreiber_name, a.linie, a.vm, a.linien_id, a.zusatz,
                CASE WHEN a.produkt_roh IS NULL THEN 'Unbekannt'
                     ELSE upper(left(a.produkt_roh, 1)) || lower(substr(a.produkt_roh, 2)) END AS produkt,
                r.von, r.nach, r.start_soll, r.ende_soll,
@@ -395,7 +402,8 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
                count(*) FILTER (WHERE komplett_ausfall),
                count(*) FILTER (WHERE teilausfall),
                count(*) FILTER (WHERE unplausibel),
-               count(*) FILTER (WHERE max_roh >= {SCHWELLE} AND coalesce(max_vsp, 0) < {SCHWELLE})
+               count(*) FILTER (WHERE max_roh >= {SCHWELLE} AND coalesce(max_vsp, 0) < {SCHWELLE} AND NOT uhr),
+               count(*) FILTER (WHERE uhr)
         FROM f""").fetchone()
     kennzahlen = {
         "fahrten": k[0], "fahrten_gemessen": k[1],
@@ -403,6 +411,7 @@ def analysiere(pfad: Path, datum: dt.date, quelle: dict, vortag: dict | None = N
         "max": minuten(k[2 + len(STUFEN)]) or 0,
         "ausfaelle": k[3 + len(STUFEN)], "teilausfaelle": k[4 + len(STUFEN)],
         "unplausibel": k[5 + len(STUFEN)], "ausreisser": k[6 + len(STUFEN)],
+        "zeitumstellung": k[7 + len(STUFEN)],
     }
 
     produkte = [{"produkt": p, "fahrten": n, "gemessen": g, "ab60": a} for p, n, g, a in con.execute(f"""
@@ -577,6 +586,14 @@ def baue_index(ausgabe: Path, demo: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------- Ablauf
+
+def zeitumstellung(datum: dt.date) -> bool:
+    """True, wenn in der Nacht vor oder nach diesem Betriebstag die Uhr umgestellt wird."""
+    def versatz(d: dt.date):
+        return dt.datetime.combine(d, dt.time(12), tzinfo=TZ).utcoffset()
+    tag = dt.timedelta(days=1)
+    return versatz(datum - tag) != versatz(datum) or versatz(datum) != versatz(datum + tag)
+
 
 def heute_ch() -> dt.date:
     return dt.datetime.now(TZ).date()

@@ -81,6 +81,33 @@ def pruefe_katalog() -> None:
         analyse._katalog.clear()
 
 
+def pruefe_zeitumstellung() -> None:
+    """Nacht der Zeitumstellung: durchgehend +60 Min. ist die verstellte Uhr, keine Verspätung."""
+    for datum, zaehlt in ((dt.date(2026, 10, 24), False), (dt.date(2026, 10, 10), True)):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv = Path(tmp) / "x.csv"
+            beispieldaten.erzeuge(datum, csv)
+            tag_str = datum.strftime("%d.%m.%Y")
+            zeilen = []
+            for i, (name, m) in enumerate([("Sion", 0), ("Martigny", 12), ("Aigle", 32), ("Lausanne", 63)]):
+                soll = dt.datetime.combine(datum, dt.time(23, 50)) + dt.timedelta(minutes=m)
+                ist = soll + dt.timedelta(minutes=60, seconds=30)
+                an = "" if i == 0 else soll.strftime("%d.%m.%Y %H:%M")
+                an_ist = "" if i == 0 else ist.strftime("%d.%m.%Y %H:%M:%S")
+                ab = "" if i == 3 else soll.strftime("%d.%m.%Y %H:%M")
+                ab_ist = "" if i == 3 else ist.strftime("%d.%m.%Y %H:%M:%S")
+                zeilen.append(";".join([tag_str, "85:11:18494:001", "85:11", "SBB", "SBB", "Zug", "18494", "REN 9", "",
+                                        "REN", "false", "false", f"85{i:05d}", name, an, an_ist, "REAL" if an else "",
+                                        ab, ab_ist, "REAL" if ab else "", "false", ""]))
+            with open(csv, "a", encoding="utf-8") as f:
+                f.write("\n".join(zeilen) + "\n")
+            tag = analyse.analysiere(csv, datum, QUELLE)
+        drin = any(t["id"] == "85:11:18494:001" for t in tag["liste"])
+        assert drin == zaehlt, f"{datum}: Zeitumstellungs-Fahrt {'fehlt' if zaehlt else 'wurde gezählt'}"
+        if not zaehlt:
+            assert tag["kennzahlen"]["zeitumstellung"] >= 1
+
+
 def pruefe_ablauf() -> None:
     """Ganzer Lauf wie in GitHub Actions: Katalog → Download → Analyse → Index, zweimal."""
     heute = dt.date(2026, 11, 15)
@@ -116,6 +143,8 @@ if __name__ == "__main__":
     print("✓ Katalog-Suche")
     pruefe_ablauf()
     print("✓ Ganzer Ablauf (Nachholen, Index, kein Doppellauf)")
+    pruefe_zeitumstellung()
+    print("✓ Zeitumstellung (verstellte Uhr zählt nicht)")
     n = 0
     for i in range(12):
         datum = (dt.date(2026, 10, 1) + dt.timedelta(days=i)).isoformat()

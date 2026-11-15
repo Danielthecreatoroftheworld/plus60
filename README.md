@@ -39,6 +39,7 @@ Weitere Optionen: `python pipeline/analyse.py --help`
 - **Nur Züge.** Bei Bussen und Trams entstehen Werte über einer Stunde fast immer durch falsch zugeordnete Fahrten (ein Bus fährt eine spätere Fahrt, die Daten buchen sie auf eine frühere). Mit `--alle-verkehrsmittel` lassen sie sich trotzdem auswerten.
 - **Gezählt** werden Ist-Zeiten mit Status «REAL» (gemessen) und «GESCHAETZT». Reine Prognosen zählen nicht, ausser an Tagen, an denen weniger als 20 % der Zeiten gemessen sind (das Dashboard weist darauf hin).
 - **Bestätigt durch Nachbarhalte.** Eine Verspätung zählt nur, wenn der Halt davor oder danach (auch im Ausland) höchstens 40 Minuten weniger zeigt. Typische Messfehler, etwa +181 Min. an der Endstation nach durchgehend +5 Min., fallen so weg. Im Dashboard stehen sie mit «?» im Verlauf.
+- **Zeitumstellung.** In der Nacht der Zeitumstellung zählen Züge nicht, die durchgehend 55–65 Min. abweichen (verstellte Uhr in den Daten).
 - **Nicht gezählt**: Durchfahrten ohne Halt, Halte im Ausland (der Datensatz v2 enthält sie, sie dienen nur für die Anzeige der Route), ausgefallene Halte und Abweichungen über 12 Stunden (Datenfehler).
 - **Ausgefallen** = die Fahrt ist an allen Schweizer Halten als ausgefallen gemeldet.
 - Pro Tag werden die 300 grössten Verspätungen mit ihrem Verlauf gespeichert; die Kennzahlen zählen alle Fahrten.
